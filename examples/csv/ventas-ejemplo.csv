@@ -1,0 +1,5 @@
+customer_email;order_id;producto;categoria;variante;fecha;total
+ana@ejemplo.com;1001;Pijama Nube;Pijamas;Talle M;2026-05-04;45000
+ana@ejemplo.com;1002;Body Lino;Bodies;Talle M;2026-06-18;28000
+carla@ejemplo.com;1003;Pijama Estrella;Pijamas;Talle L;2026-07-01;52000
+diego@ejemplo.com;1004;Bata Soft;Batas;Talle L;2026-04-22;39000
