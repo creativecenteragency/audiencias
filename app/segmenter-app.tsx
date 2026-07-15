@@ -261,6 +261,17 @@ export function SegmenterApp() {
     <section className="hero"><div className="eyebrow">Segmentación simple. Datos bajo control.</div><h1>Convertí tus datos en<br/><em>audiencias accionables.</em></h1><p>Cruzá tu base de contactos con ventas, encontrá oportunidades y exportá segmentos listos para activar.</p></section>
 <section className="upload-panel"><div className="panel-heading"><div><span>PASO 1 DE 2</span><h2>Cargá uno o varios archivos</h2></div><p>Podés seleccionar varios CSV de contactos y de ventas. Los combinamos automáticamente.</p></div><div className="file-grid"><FileCard kind="contactos" files={contactFiles} busy={busy === "contacts"} onFiles={(files) => readFiles("contacts", files)} onClear={() => { setContactFiles([]); setContactMap(emptyContactMap); }} /><FileCard kind="ventas" files={salesFiles} busy={busy === "sales"} onFiles={(files) => readFiles("sales", files)} onClear={() => { setSalesFiles([]); setSalesMap(emptySalesMap); }} /></div>{error && <div className="error">{error}</div>}<button className="primary wide" disabled={(!contactsFile && !salesFile) || !!busy} onClick={startMapping}>Revisar y continuar <span>→</span></button></section>
     <div className="privacy-note"><span>⌁</span><div><strong>Tus datos no salen de este navegador.</strong><p>No subimos ni almacenamos tus archivos. Al cerrar o recargar esta pestaña, desaparecen.</p></div></div>
+    <section className="faq-section" aria-labelledby="faq-title">
+      <div className="faq-heading"><span>ANTES DE EMPEZAR</span><h2 id="faq-title">Preguntas frecuentes</h2><p>Todo lo necesario para preparar tus archivos y crear tu primer segmento.</p></div>
+      <div className="faq-list">
+        <details><summary>¿Qué archivos puedo usar?</summary><p>Archivos CSV de contactos, de ventas o de ambos tipos. Pueden estar separados por coma o punto y coma.</p></details>
+        <details><summary>¿Puedo cargar varios CSV a la vez?</summary><p>Sí. Podés seleccionar o arrastrar varios archivos dentro de Contactos y de Ventas. Para obtener mejores resultados, usá la misma estructura de columnas en los archivos de cada tipo.</p></details>
+        <details><summary>¿Qué datos son obligatorios?</summary><p>El email es el único campo obligatorio porque permite identificar y cruzar a cada persona. Antes de crear la audiencia vas a poder confirmar qué columna corresponde a cada dato.</p></details>
+        <details><summary>¿Cómo se combinan contactos y ventas?</summary><p>La aplicación relaciona ambos archivos mediante el email. Así podés distinguir compradores, no compradores, productos adquiridos, gasto y última compra.</p></details>
+        <details><summary>¿Mis archivos se guardan o se suben?</summary><p>No. Todo se procesa localmente en esta pestaña del navegador. Si recargás o cerrás la página, los archivos y resultados desaparecen.</p></details>
+        <details><summary>¿Cómo obtengo el segmento final?</summary><p>Después de revisar las columnas, aplicá los filtros que necesites y elegí “Exportar CSV”. El archivo descargado incluirá todas las personas que coincidan con el segmento.</p></details>
+      </div>
+    </section>
   </main>;
 
   if (stage === "mapping") return <main className="mapping-shell">
