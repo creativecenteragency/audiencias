@@ -72,17 +72,32 @@ function detectMap<T extends Record<string, string>>(headers: string[], template
   return result;
 }
 
-function FileCard({ kind, file, busy, onFile }: { kind: "contactos" | "ventas"; file: ParsedFile | null; busy: boolean; onFile: (file: File) => void }) {
+function mergeFiles(files: ParsedFile[]): ParsedFile | null {
+  if (!files.length) return null;
+  return {
+    name: files.map((file) => file.name).join(", "),
+    headers: Array.from(new Set(files.flatMap((file) => file.headers))),
+    rows: files.flatMap((file) => file.rows),
+    delimiter: files[0].delimiter,
+  };
+}
+
+function FileCard({ kind, files, busy, onFiles, onClear }: { kind: "contactos" | "ventas"; files: ParsedFile[]; busy: boolean; onFiles: (files: File[]) => void; onClear: () => void }) {
   const input = useRef<HTMLInputElement>(null);
   const title = kind === "contactos" ? "Base de contactos" : "Ventas o transacciones";
   const detail = kind === "contactos" ? "Tu audiencia completa, con email como mínimo." : "Pedidos, productos, fechas y montos.";
+  const rows = files.reduce((total, file) => total + file.rows.length, 0);
+  const summary = files.length === 1 ? `${files[0].name} · ${rows.toLocaleString("es-AR")} filas` : `${files.length} archivos · ${rows.toLocaleString("es-AR")} filas`;
   return (
-    <button type="button" className={`file-card ${file ? "is-ready" : ""}`} onClick={() => input.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) onFile(f); }}>
-      <input ref={input} type="file" accept=".csv,text/csv" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) onFile(f); }} />
-      <span className="file-icon">{file ? "✓" : kind === "contactos" ? "01" : "02"}</span>
-      <span className="file-copy"><strong>{title}</strong><small>{busy ? "Procesando…" : file ? `${file.name} · ${file.rows.length.toLocaleString("es-AR")} filas` : detail}</small></span>
-      <span className="file-action">{file ? "Cambiar" : "Elegir CSV"}</span>
-    </button>
+    <div className={`file-slot ${files.length ? "is-ready" : ""}`} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const dropped = Array.from(e.dataTransfer.files); if (dropped.length) onFiles(dropped); }}>
+      <button type="button" className={`file-card ${files.length ? "is-ready" : ""}`} onClick={() => input.current?.click()} disabled={busy}>
+        <input ref={input} type="file" accept=".csv,text/csv" multiple hidden onChange={(e) => { const selected = Array.from(e.target.files || []); if (selected.length) onFiles(selected); e.target.value = ""; }} />
+        <span className="file-icon">{files.length ? "✓" : kind === "contactos" ? "01" : "02"}</span>
+        <span className="file-copy"><strong>{title}</strong><small title={files.map((file) => file.name).join(", ")}>{busy ? "Procesando…" : files.length ? summary : detail}</small></span>
+        <span className="file-action">{files.length ? "Agregar CSV" : "Elegir CSV"}</span>
+      </button>
+      {files.length > 0 && <button type="button" className="file-clear" onClick={onClear} disabled={busy}>Quitar todos</button>}
+    </div>
   );
 }
 
@@ -91,8 +106,8 @@ function MappingSelect({ label, value, headers, required, onChange }: { label: s
 }
 
 export function SegmenterApp() {
-  const [contactsFile, setContactsFile] = useState<ParsedFile | null>(null);
-  const [salesFile, setSalesFile] = useState<ParsedFile | null>(null);
+  const [contactFiles, setContactFiles] = useState<ParsedFile[]>([]);
+  const [salesFiles, setSalesFiles] = useState<ParsedFile[]>([]);
   const [contactMap, setContactMap] = useState<ContactMap>(emptyContactMap);
   const [salesMap, setSalesMap] = useState<SalesMap>(emptySalesMap);
   const [stage, setStage] = useState<"upload" | "mapping" | "dashboard">("upload");
@@ -115,26 +130,44 @@ export function SegmenterApp() {
   const [ruleLogic, setRuleLogic] = useState<"and" | "or">("and");
   const [includePhone, setIncludePhone] = useState(true);
   const [showRules, setShowRules] = useState(false);
+  const contactsFile = useMemo(() => mergeFiles(contactFiles), [contactFiles]);
+  const salesFile = useMemo(() => mergeFiles(salesFiles), [salesFiles]);
 
-  const readFile = (kind: "contacts" | "sales", file: File) => {
-    if (!file.name.toLowerCase().endsWith(".csv")) { setError("Elegí un archivo con formato CSV."); return; }
-    setBusy(kind); setError("");
+  const parseCsvFile = (kind: "contacts" | "sales", file: File) => new Promise<ParsedFile>((resolve, reject) => {
     const worker = new Worker("./csv-worker.js");
     worker.onmessage = ({ data }) => {
-      worker.terminate(); setBusy("");
-      if (data.error) { setError(data.error); return; }
-      const parsed = { name: file.name, headers: data.headers, rows: data.rows, delimiter: data.delimiter } as ParsedFile;
-      if (kind === "contacts") { setContactsFile(parsed); setContactMap(detectMap(parsed.headers, emptyContactMap)); }
-      else { setSalesFile(parsed); setSalesMap(detectMap(parsed.headers, emptySalesMap)); }
+      worker.terminate();
+      if (data.error) { reject(new Error(`${file.name}: ${data.error}`)); return; }
+      resolve({ name: file.name, headers: data.headers, rows: data.rows, delimiter: data.delimiter });
     };
-    worker.onerror = () => { worker.terminate(); setBusy(""); setError("No pudimos procesar ese archivo. Revisá su formato e intentá de nuevo."); };
+    worker.onerror = () => { worker.terminate(); reject(new Error(`No pudimos procesar ${file.name}. Revisá su formato e intentá de nuevo.`)); };
     file.arrayBuffer().then((buffer) => {
       const bytes = new Uint8Array(buffer);
       let text: string;
       try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
       catch { text = new TextDecoder("windows-1252").decode(bytes); }
       worker.postMessage({ text, id: kind });
-    }).catch(() => { worker.terminate(); setBusy(""); setError("No pudimos leer ese archivo. Revisá que esté disponible e intentá de nuevo."); });
+    }).catch(() => { worker.terminate(); reject(new Error(`No pudimos leer ${file.name}. Revisá que esté disponible e intentá de nuevo.`)); });
+  });
+
+  const readFiles = async (kind: "contacts" | "sales", files: File[]) => {
+    const invalid = files.find((file) => !file.name.toLowerCase().endsWith(".csv"));
+    if (invalid) { setError(`${invalid.name} no tiene formato CSV.`); return; }
+    setBusy(kind); setError("");
+    try {
+      const parsed = await Promise.all(files.map((file) => parseCsvFile(kind, file)));
+      if (kind === "contacts") {
+        const next = [...contactFiles, ...parsed];
+        setContactFiles(next); setContactMap(detectMap(mergeFiles(next)?.headers || [], emptyContactMap));
+      } else {
+        const next = [...salesFiles, ...parsed];
+        setSalesFiles(next); setSalesMap(detectMap(mergeFiles(next)?.headers || [], emptySalesMap));
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "No pudimos procesar los archivos seleccionados.");
+    } finally {
+      setBusy("");
+    }
   };
 
   const people = useMemo<Person[]>(() => {
@@ -226,7 +259,7 @@ export function SegmenterApp() {
   if (stage === "upload") return <main className="welcome-shell">
     <nav className="topbar"><div className="brand"><img src="./creative-center-positive.png" alt="Creative Center" /></div><span className="privacy-pill"><i /> 100% privado</span></nav>
     <section className="hero"><div className="eyebrow">Segmentación simple. Datos bajo control.</div><h1>Convertí tus datos en<br/><em>audiencias accionables.</em></h1><p>Cruzá tu base de contactos con ventas, encontrá oportunidades y exportá segmentos listos para activar.</p></section>
-    <section className="upload-panel"><div className="panel-heading"><div><span>PASO 1 DE 2</span><h2>Cargá uno o ambos archivos</h2></div><p>Podés analizar contactos, ventas o cruzar ambos. Aceptamos CSV con coma o punto y coma.</p></div><div className="file-grid"><FileCard kind="contactos" file={contactsFile} busy={busy === "contacts"} onFile={(f) => readFile("contacts", f)} /><FileCard kind="ventas" file={salesFile} busy={busy === "sales"} onFile={(f) => readFile("sales", f)} /></div>{error && <div className="error">{error}</div>}<button className="primary wide" disabled={(!contactsFile && !salesFile) || !!busy} onClick={startMapping}>Revisar y continuar <span>→</span></button></section>
+<section className="upload-panel"><div className="panel-heading"><div><span>PASO 1 DE 2</span><h2>Cargá uno o varios archivos</h2></div><p>Podés seleccionar varios CSV de contactos y de ventas. Los combinamos automáticamente.</p></div><div className="file-grid"><FileCard kind="contactos" files={contactFiles} busy={busy === "contacts"} onFiles={(files) => readFiles("contacts", files)} onClear={() => { setContactFiles([]); setContactMap(emptyContactMap); }} /><FileCard kind="ventas" files={salesFiles} busy={busy === "sales"} onFiles={(files) => readFiles("sales", files)} onClear={() => { setSalesFiles([]); setSalesMap(emptySalesMap); }} /></div>{error && <div className="error">{error}</div>}<button className="primary wide" disabled={(!contactsFile && !salesFile) || !!busy} onClick={startMapping}>Revisar y continuar <span>→</span></button></section>
     <div className="privacy-note"><span>⌁</span><div><strong>Tus datos no salen de este navegador.</strong><p>No subimos ni almacenamos tus archivos. Al cerrar o recargar esta pestaña, desaparecen.</p></div></div>
   </main>;
 
@@ -234,8 +267,8 @@ export function SegmenterApp() {
     <nav className="topbar"><button className="text-button" onClick={() => setStage("upload")}>← Volver</button><div className="brand"><img src="./creative-center-positive.png" alt="Creative Center" /></div><span className="privacy-pill"><i /> local</span></nav>
     <section className="mapping-intro"><span>PASO 2 DE 2</span><h1>Confirmá cómo leer los datos</h1><p>Detectamos estas columnas automáticamente. Corregí cualquier campo que no coincida.</p></section>
     <section className={`mapping-grid ${contactsFile && salesFile ? "" : "single"}`}>
-      {contactsFile && <div className="mapping-card"><header><span>01</span><div><h2>Contactos</h2><p>{contactsFile.name}</p></div></header><div className="mapping-fields">{([['email','Email'],['name','Nombre'],['lastName','Apellido'],['phone','Teléfono / WhatsApp'],['province','Provincia'],['city','Ciudad'],['country','País'],['marketing','Acepta marketing']] as [keyof ContactMap,string][]).map(([key,label]) => <MappingSelect key={key} label={label} required={key==='email'} value={contactMap[key]} headers={contactsFile.headers} onChange={(v) => setContactMap({...contactMap,[key]:v})}/>)}</div></div>}
-      {salesFile && <div className="mapping-card"><header><span>{contactsFile ? '02' : '01'}</span><div><h2>Ventas o transacciones</h2><p>{salesFile.name}</p></div></header><div className="mapping-fields">{([['email','Email'],['orderId','ID de operación'],['product','Producto o servicio'],['category','Categoría'],['variant','Variante / atributo'],['date','Fecha'],['total','Monto'],['paymentStatus','Estado del pago'],['name','Nombre del cliente'],['phone','Teléfono'],['province','Provincia'],['city','Ciudad'],['country','País']] as [keyof SalesMap,string][]).map(([key,label]) => <MappingSelect key={key} label={label} required={key==='email'} value={salesMap[key]} headers={salesFile.headers} onChange={(v) => setSalesMap({...salesMap,[key]:v})}/>)}</div></div>}
+      {contactsFile && <div className="mapping-card"><header><span>01</span><div><h2>Contactos</h2><p title={contactsFile.name}>{contactFiles.length === 1 ? contactsFile.name : `${contactFiles.length} archivos combinados`}</p></div></header><div className="mapping-fields">{([['email','Email'],['name','Nombre'],['lastName','Apellido'],['phone','Teléfono / WhatsApp'],['province','Provincia'],['city','Ciudad'],['country','País'],['marketing','Acepta marketing']] as [keyof ContactMap,string][]).map(([key,label]) => <MappingSelect key={key} label={label} required={key==='email'} value={contactMap[key]} headers={contactsFile.headers} onChange={(v) => setContactMap({...contactMap,[key]:v})}/>)}</div></div>}
+      {salesFile && <div className="mapping-card"><header><span>{contactsFile ? '02' : '01'}</span><div><h2>Ventas o transacciones</h2><p title={salesFile.name}>{salesFiles.length === 1 ? salesFile.name : `${salesFiles.length} archivos combinados`}</p></div></header><div className="mapping-fields">{([['email','Email'],['orderId','ID de operación'],['product','Producto o servicio'],['category','Categoría'],['variant','Variante / atributo'],['date','Fecha'],['total','Monto'],['paymentStatus','Estado del pago'],['name','Nombre del cliente'],['phone','Teléfono'],['province','Provincia'],['city','Ciudad'],['country','País']] as [keyof SalesMap,string][]).map(([key,label]) => <MappingSelect key={key} label={label} required={key==='email'} value={salesMap[key]} headers={salesFile.headers} onChange={(v) => setSalesMap({...salesMap,[key]:v})}/>)}</div></div>}
     </section>
     {error && <div className="error centered">{error}</div>}
     <div className="mapping-footer"><p>{contactsFile && <><strong>{contactsFile.rows.length.toLocaleString("es-AR")}</strong> contactos</>}{contactsFile && salesFile && ' · '}{salesFile && <><strong>{salesFile.rows.length.toLocaleString("es-AR")}</strong> transacciones</>}</p><button className="primary" onClick={finishMapping}>Crear audiencia <span>→</span></button></div>
